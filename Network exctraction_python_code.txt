@@ -1,0 +1,140 @@
+import tkinter as tk
+from tkinter import filedialog
+import os
+import rasterio
+import csv
+
+def process_data(plants_path, pollinators_path, output_folder):
+    interaction_matrices = {}
+
+    plant_files = [os.path.join(plants_path, f) for f in os.listdir(plants_path) if f.endswith('.tif')]
+    pollinator_files = [os.path.join(pollinators_path, f) for f in os.listdir(pollinators_path) if f.endswith('.tif')]
+
+    plants = [rasterio.open(file) for file in plant_files]
+    pollinators = [rasterio.open(file) for file in pollinator_files]
+
+    plant_layer_names = [os.path.splitext(os.path.basename(file))[0] for file in plant_files]
+    pollinator_layer_names = [os.path.splitext(os.path.basename(file))[0] for file in pollinator_files]
+
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    for idx, plant in enumerate(plants):
+        bounds = plant.bounds
+        xmin, ymin, xmax, ymax = bounds.left, bounds.bottom, bounds.right, bounds.top
+        x_res, y_res = plant.res
+        nrow, ncol = plant.shape
+
+        x_increment = (xmax - xmin) / ncol
+        y_increment = (ymax - ymin) / nrow
+
+        for i in range(ncol * nrow):
+            row_idx = i // ncol
+            col_idx = i % ncol
+
+            cell_center_x = xmin + (col_idx + 0.5) * x_increment
+            cell_center_y = ymax - (row_idx + 0.5) * y_increment
+
+            cell_name = f"Lat{cell_center_y}_Lon{cell_center_x}"
+            print(f"Processing cell {cell_name}")
+
+            valid_cell = True  # Initialize a flag to determine if the cell meets criteria
+
+            # Check if any layer has a value other than 1 or 0
+            for band in plants + pollinators:
+                cell_value = band.read(1)[row_idx, col_idx]
+                if cell_value not in [0, 1]:
+                    valid_cell = False
+                    break  # Exit the loop if an invalid value is found
+
+            if not valid_cell:
+                print("Skipping cell due to non-binary values")
+                continue
+
+            interaction_matrix = [[0 for _ in range(len(pollinators))] for _ in range(len(plants))]
+
+            for j, plnt in enumerate(plants):
+                for k, pol in enumerate(pollinators):
+                    plnt_val = plnt.read(1)[row_idx, col_idx]
+                    pol_val = pol.read(1)[row_idx, col_idx]
+
+                    # Capture interaction when both plant and pollinator have a value of 1
+                    if plnt_val == 1 and pol_val == 1:
+                        interaction_matrix[j][k] = 1
+
+            # Writing CSV immediately after processing the cell
+            csv_filename = os.path.join(output_folder, f"{cell_name}.csv")
+            with open(csv_filename, mode='w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow([''] + pollinator_layer_names)
+                for i, row_name in enumerate(plant_layer_names):
+                    writer.writerow([row_name] + [str(val) for val in interaction_matrix[i]])
+
+            print(f"Interaction matrix created and saved as CSV for cell: {cell_name}")
+
+def run_script():
+    plants_path = entry_plants.get()
+    pollinators_path = entry_pollinators.get()
+    output_path = entry_output.get()
+
+    if not os.path.isdir(plants_path) or not os.path.isdir(pollinators_path) or not os.path.isdir(output_path):
+        status_label.config(text="Please select valid folders.")
+        return
+
+    process_data(plants_path, pollinators_path, output_path)
+    status_label.config(text="Script executed successfully.")
+
+def browse_plants_folder():
+    folder_path = filedialog.askdirectory()
+    if folder_path:
+        entry_plants.delete(0, tk.END)
+        entry_plants.insert(0, folder_path)
+
+def browse_pollinators_folder():
+    folder_path = filedialog.askdirectory()
+    if folder_path:
+        entry_pollinators.delete(0, tk.END)
+        entry_pollinators.insert(0, folder_path)
+
+def browse_output_folder():
+    folder_path = filedialog.askdirectory()
+    if folder_path:
+        entry_output.delete(0, tk.END)
+        entry_output.insert(0, folder_path)
+
+root = tk.Tk()
+root.title("Plant-Pollinator Network Extraction")
+
+# Label and entry for plants folder
+label_plants = tk.Label(root, text=" Plants")
+label_plants.grid(row=0, column=0, padx=10, pady=5, sticky="e")
+entry_plants = tk.Entry(root, width=50)
+entry_plants.grid(row=0, column=1, padx=10, pady=5)
+button_browse_plants = tk.Button(root, text="Browse", command=browse_plants_folder)
+button_browse_plants.grid(row=0, column=2, padx=10, pady=5)
+
+# Label and entry for pollinators folder
+label_pollinators = tk.Label(root, text=" Pollinators")
+label_pollinators.grid(row=1, column=0, padx=10, pady=5, sticky="e")
+entry_pollinators = tk.Entry(root, width=50)
+entry_pollinators.grid(row=1, column=1, padx=10, pady=5)
+button_browse_pollinators = tk.Button(root, text="Browse", command=browse_pollinators_folder)
+button_browse_pollinators.grid(row=1, column=2, padx=10, pady=5)
+
+# Label and entry for output folder
+label_output = tk.Label(root, text=" Output Folder")
+label_output.grid(row=2, column=0, padx=10, pady=5, sticky="e")
+entry_output = tk.Entry(root, width=50)
+entry_output.grid(row=2, column=1, padx=10, pady=5)
+button_browse_output = tk.Button(root, text="Browse", command=browse_output_folder)
+button_browse_output.grid(row=2, column=2, padx=10, pady=5)
+
+# Button to run the script
+button_run = tk.Button(root, text="Run", command=run_script)
+button_run.grid(row=3, column=0, columnspan=3, padx=10, pady=5)
+
+# Label to display status
+status_label = tk.Label(root, text="")
+status_label.grid(row=4, column=0, columnspan=3, padx=10, pady=5)
+
+root.mainloop()
